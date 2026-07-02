@@ -148,17 +148,35 @@ def register_read_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def get_document_content(
-        ctx: Context, site_id: str, drive_id: str, item_id: str, filename: str
+        ctx: Context,
+        site_id: str,
+        drive_id: str,
+        item_id: str,
+        filename: str,
+        start_page: int = 1,
+        end_page: int = None,
     ) -> str:
         """Get and process content from a SharePoint document.
+
+        Supports PDF, DOCX, XLSX, CSV, TXT, MD, HTML.
+        Use start_page and end_page to read any range of pages (PDF),
+        paragraphs (DOCX), or lines (TXT). The response always includes
+        total_pages so you know how many pages/paragraphs the file has.
 
         Args:
             site_id: ID of the site
             drive_id: ID of the document library
             item_id: ID of the document
             filename: Name of the file (for content type detection)
+            start_page: First page/paragraph/line to extract (1-indexed, default 1)
+            end_page: Last page/paragraph/line to extract, inclusive (default: start+9
+                for PDF, start+19 for DOCX, start+29 for TXT). Pass the total page
+                count to read all remaining pages from start_page.
         """
-        logger.info(f"Tool called: get_document_content for file: {filename}")
+        logger.info(
+            f"Tool called: get_document_content for file: {filename} "
+            f"pages {start_page}-{end_page or 'auto'}"
+        )
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
@@ -168,7 +186,9 @@ def register_read_tools(mcp: FastMCP):
             content = await graph_client.get_document_content(
                 site_id, drive_id, item_id
             )
-            processed_content = DocumentProcessor.process_document(content, filename)
+            processed_content = DocumentProcessor.process_document(
+                content, filename, start_page=start_page, end_page=end_page
+            )
             logger.info(f"Successfully processed document content for: {filename}")
             return json.dumps(processed_content, indent=2)
         except Exception as e:
@@ -219,17 +239,35 @@ def register_read_tools(mcp: FastMCP):
 
     @mcp.tool()
     async def get_document_by_path(
-        ctx: Context, site_id: str, drive_id: str, file_path: str, filename: str
+        ctx: Context,
+        site_id: str,
+        drive_id: str,
+        file_path: str,
+        filename: str,
+        start_page: int = 1,
+        end_page: int = None,
     ) -> str:
         """Get and process the content of a SharePoint document by its path.
+
+        Supports PDF, DOCX, XLSX, CSV, TXT, MD, HTML.
+        Use start_page and end_page to read any range of pages (PDF),
+        paragraphs (DOCX), or lines (TXT). The response always includes
+        total_pages so you know how many pages/paragraphs the file has.
 
         Args:
             site_id: ID of the site
             drive_id: ID of the document library (drive)
             file_path: File path relative to drive root (e.g. "General/report.docx")
             filename: File name used to detect the document type (e.g. "report.docx")
+            start_page: First page/paragraph/line to extract (1-indexed, default 1)
+            end_page: Last page/paragraph/line to extract, inclusive (default: start+9
+                for PDF, start+19 for DOCX, start+29 for TXT). Pass the total page
+                count to read all remaining pages from start_page.
         """
-        logger.info(f"Tool called: get_document_by_path path='{file_path}'")
+        logger.info(
+            f"Tool called: get_document_by_path path='{file_path}' "
+            f"pages {start_page}-{end_page or 'auto'}"
+        )
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
@@ -239,7 +277,9 @@ def register_read_tools(mcp: FastMCP):
             content = await graph_client.get_document_content_by_path(
                 site_id, drive_id, file_path
             )
-            processed_content = DocumentProcessor.process_document(content, filename)
+            processed_content = DocumentProcessor.process_document(
+                content, filename, start_page=start_page, end_page=end_page
+            )
             logger.info(
                 f"Successfully processed document content for path: '{file_path}'"
             )

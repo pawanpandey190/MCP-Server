@@ -127,6 +127,7 @@ def run_auth_diagnostic():
         print(f"Request: {graph_url}")
 
         response = requests.get(graph_url, headers=headers)
+        access_successful = False
 
         if response.status_code != 200:
             print(
@@ -145,79 +146,78 @@ def run_auth_diagnostic():
                 print(
                     "   Permissions such as Sites.Read.All, Files.Read.All are required"
                 )
-
-            return False
-
-        site_info = response.json()
-        print("✅ Successfully accessed SharePoint site")
-        print(f"Site name: {site_info.get('displayName', 'Unknown')}")
-        print(f"Site ID: {site_info.get('id', 'Unknown')}")
-
-        # Try listing document libraries
-        print("\nAttempting to list document libraries...")
-
-        drives_url = f"https://graph.microsoft.com/v1.0/sites/{site_info['id']}/drives"
-        response = requests.get(drives_url, headers=headers)
-
-        if response.status_code != 200:
-            print(
-                f"❌ Error: Failed to list document libraries: HTTP {response.status_code}"
-            )
-            print(f"Response: {response.text}")
         else:
-            drives = response.json().get("value", [])
-            print(f"✅ Successfully listed {len(drives)} document libraries")
-            for drive in drives:
-                print(f"  - {drive.get('name', 'Unknown')}")
+            site_info = response.json()
+            print("✅ Successfully accessed SharePoint site")
+            print(f"Site name: {site_info.get('displayName', 'Unknown')}")
+            print(f"Site ID: {site_info.get('id', 'Unknown')}")
+            access_successful = True
 
-        # Test write permissions
-        print("\n--- Testing Write Permissions ---")
-        try:
-            # Try to create a test list
-            test_list_name = f"TestList_{uuid.uuid4().hex[:8]}"
+            # Try listing document libraries
+            print("\nAttempting to list document libraries...")
 
-            create_list_url = (
-                f"https://graph.microsoft.com/v1.0/sites/{site_info['id']}/lists"
-            )
-            create_list_data = {
-                "displayName": test_list_name,
-                "list": {"template": "genericList"},
-                "description": "Test list created by diagnostic tool",
-            }
+            drives_url = f"https://graph.microsoft.com/v1.0/sites/{site_info['id']}/drives"
+            response = requests.get(drives_url, headers=headers)
 
-            print(f"Attempting to create test list: {test_list_name}")
-            create_response = requests.post(
-                create_list_url, headers=headers, json=create_list_data
-            )
-
-            if create_response.status_code in (201, 200):
+            if response.status_code != 200:
                 print(
-                    "✅ Successfully created a test list - write permissions confirmed"
+                    f"❌ Error: Failed to list document libraries: HTTP {response.status_code}"
                 )
-
-                # Clean up - delete test list
-                list_id = create_response.json().get("id")
-                delete_url = f"https://graph.microsoft.com/v1.0/sites/{site_info['id']}/lists/{list_id}"
-                delete_response = requests.delete(delete_url, headers=headers)
-
-                if delete_response.status_code in (204, 200):
-                    print("✅ Test list deleted successfully")
-                else:
-                    print(
-                        f"⚠️ Warning: Could not delete test list: {delete_response.status_code}"
-                    )
+                print(f"Response: {response.text}")
             else:
-                print(f"❌ Failed to create test list: {create_response.status_code}")
-                print(f"Response: {create_response.text}")
-                print("   You may not have sufficient write permissions")
-                print(
-                    "   Check that your application has Sites.ReadWrite.All permission"
+                drives = response.json().get("value", [])
+                print(f"✅ Successfully listed {len(drives)} document libraries")
+                for drive in drives:
+                    print(f"  - {drive.get('name', 'Unknown')}")
+
+            # Test write permissions
+            print("\n--- Testing Write Permissions ---")
+            try:
+                # Try to create a test list
+                test_list_name = f"TestList_{uuid.uuid4().hex[:8]}"
+
+                create_list_url = (
+                    f"https://graph.microsoft.com/v1.0/sites/{site_info['id']}/lists"
                 )
-                print(
-                    "   For creating sites, you also need Sites.Manage.All permission"
+                create_list_data = {
+                    "displayName": test_list_name,
+                    "list": {"template": "genericList"},
+                    "description": "Test list created by diagnostic tool",
+                }
+
+                print(f"Attempting to create test list: {test_list_name}")
+                create_response = requests.post(
+                    create_list_url, headers=headers, json=create_list_data
                 )
-        except Exception as e:
-            print(f"❌ Error during write permission test: {str(e)}")
+
+                if create_response.status_code in (201, 200):
+                    print(
+                        "✅ Successfully created a test list - write permissions confirmed"
+                    )
+
+                    # Clean up - delete test list
+                    list_id = create_response.json().get("id")
+                    delete_url = f"https://graph.microsoft.com/v1.0/sites/{site_info['id']}/lists/{list_id}"
+                    delete_response = requests.delete(delete_url, headers=headers)
+
+                    if delete_response.status_code in (204, 200):
+                        print("✅ Test list deleted successfully")
+                    else:
+                        print(
+                            f"⚠️ Warning: Could not delete test list: {delete_response.status_code}"
+                        )
+                else:
+                    print(f"❌ Failed to create test list: {create_response.status_code}")
+                    print(f"Response: {create_response.text}")
+                    print("   You may not have sufficient write permissions")
+                    print(
+                        "   Check that your application has Sites.ReadWrite.All permission"
+                    )
+                    print(
+                        "   For creating sites, you also need Sites.Manage.All permission"
+                    )
+            except Exception as e:
+                print(f"❌ Error during write permission test: {str(e)}")
 
         # Check application permissions
         print("\n--- Checking Application Permissions ---")
@@ -283,8 +283,11 @@ def run_auth_diagnostic():
         traceback.print_exc()
         return False
 
-    print("\n✅ Authentication diagnostic completed successfully")
-    return True
+    if access_successful:
+        print("\n✅ Authentication diagnostic completed successfully")
+        return True
+    else:
+        return False
 
 
 if __name__ == "__main__":

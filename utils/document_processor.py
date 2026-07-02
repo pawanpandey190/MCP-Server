@@ -34,12 +34,19 @@ class DocumentProcessor:
         return True
 
     @staticmethod
-    def process_document(content: bytes, filename: str) -> Dict[str, Any]:
+    def process_document(
+        content: bytes,
+        filename: str,
+        start_page: int = 1,
+        end_page: int = None,
+    ) -> Dict[str, Any]:
         """Process document content based on file type.
 
         Args:
             content: Document content as bytes
             filename: Name of the file
+            start_page: First page/paragraph/line to extract (1-indexed, PDF/DOCX/TXT)
+            end_page: Last page/paragraph/line to extract (inclusive, None = auto limit)
 
         Returns:
             Processed document information
@@ -55,11 +62,17 @@ class DocumentProcessor:
             elif file_ext in ("xlsx", "xls"):
                 return DocumentProcessor._process_excel(content)
             elif file_ext == "docx":
-                return DocumentProcessor._process_word(content)
+                return DocumentProcessor._process_word(
+                    content, start_para=start_page, end_para=end_page
+                )
             elif file_ext == "pdf":
-                return DocumentProcessor._process_pdf(content)
+                return DocumentProcessor._process_pdf(
+                    content, start_page=start_page, end_page=end_page
+                )
             elif file_ext in ("txt", "md", "html", "htm"):
-                return DocumentProcessor._process_text(content)
+                return DocumentProcessor._process_text(
+                    content, start_line=start_page, end_line=end_page
+                )
             else:
                 return {"error": f"Unsupported file type: {file_ext}"}
         except Exception as e:
@@ -121,20 +134,40 @@ class DocumentProcessor:
         return {"type": "excel", "sheet_count": len(sheets), "sheets": sheets}
 
     @staticmethod
-    def _process_word(content: bytes) -> Dict[str, Any]:
+    def _process_word(
+        content: bytes, start_para: int = 1, end_para: int = None
+    ) -> Dict[str, Any]:
         """Process Word document content.
 
         Args:
             content: Word document content
+            start_para: First paragraph to return (1-indexed)
+            end_para: Last paragraph to return (inclusive, None = start_para + 19)
 
         Returns:
             Processed text and structure
         """
         doc = docx.Document(io.BytesIO(content))
 
-        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-        tables = []
+        all_paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        total_paragraphs = len(all_paragraphs)
 
+        # Resolve range (convert 1-indexed to 0-indexed)
+        start_idx = max(0, start_para - 1)
+        if end_para is None:
+            end_idx = start_idx + 20  # default window: 20 paragraphs
+        else:
+            end_idx = end_para  # end_para is 1-indexed inclusive → slice exclusive
+        end_idx = min(end_idx, total_paragraphs)
+
+        if start_idx >= total_paragraphs:
+            return {
+                "error": f"start_para ({start_para}) exceeds total paragraphs ({total_paragraphs})"
+            }
+
+        selected_paragraphs = all_paragraphs[start_idx:end_idx]
+
+        tables = []
         for table in doc.tables:
             t_data = []
             for row in table.rows:
@@ -156,65 +189,78 @@ class DocumentProcessor:
         except Exception as e:
             logger.warning(f"Error getting document properties: {str(e)}")
 
-        # Extract sections and headings for document structure
+        # Extract headings/structure
         structure = []
-        heading_styles = {
-            "Heading 1",
-            "Heading 2",
-            "Heading 3",
-            "Heading 4",
-            "Heading 5",
-            "Title",
-        }
+        heading_styles = {"Heading 1", "Heading 2", "Heading 3", "Heading 4", "Heading 5", "Title"}
         for p in doc.paragraphs:
             if p.style.name in heading_styles and p.text.strip():
-                level = 0
-                if p.style.name == "Title":
-                    level = 0
-                else:
-                    # Extract heading level number from style name
-                    try:
-                        level = int(p.style.name.split()[-1])
-                    except (ValueError, IndexError):
-                        level = 1
-
+                level = 0 if p.style.name == "Title" else 1
+                try:
+                    level = int(p.style.name.split()[-1])
+                except (ValueError, IndexError):
+                    pass
                 structure.append({"level": level, "text": p.text})
 
         return {
             "type": "word",
-            "paragraph_count": len(paragraphs),
+            "total_paragraph_count": total_paragraphs,
             "table_count": len(tables),
-            "content": paragraphs[:20],  # First 20 paragraphs only
-            "tables": tables[:5],  # First 5 tables only
+            "extracted_range": {"start_para": start_idx + 1, "end_para": end_idx},
+            "content": selected_paragraphs,
+            "tables": tables[:5],
             "properties": core_properties,
             "structure": structure,
         }
 
     @staticmethod
-    def _process_pdf(content: bytes) -> Dict[str, Any]:
+    def _process_pdf(
+        content: bytes, start_page: int = 1, end_page: int = None
+    ) -> Dict[str, Any]:
         """Process PDF content.
 
         Args:
             content: PDF file content
+            start_page: First page to extract (1-indexed). Default: 1
+            end_page: Last page to extract (inclusive, 1-indexed).
+                      None = start_page + 9 (window of 10 pages).
+                      Pass end_page equal to total pages to read to the end.
 
         Returns:
             Extracted text and metadata
         """
         pdf = PdfReader(io.BytesIO(content))
+        total_pages = len(pdf.pages)
 
+        # Resolve and clamp page range (convert 1-indexed to 0-indexed)
+        start_idx = max(0, start_page - 1)
+        if end_page is None:
+            end_idx = start_idx + 10  # default window: 10 pages
+        else:
+            end_idx = end_page  # 1-indexed inclusive → slice exclusive
+        end_idx = min(end_idx, total_pages)
+
+        if start_idx >= total_pages:
+            return {
+                "error": (
+                    f"start_page ({start_page}) exceeds total pages ({total_pages}). "
+                    f"This PDF has {total_pages} pages."
+                ),
+                "total_pages": total_pages,
+            }
+
+        # Extract text for the requested range
         pages = []
-        for i in range(min(10, len(pdf.pages))):  # First 10 pages only
-            pages.append(pdf.pages[i].extract_text())
+        for i in range(start_idx, end_idx):
+            page_text = pdf.pages[i].extract_text() or ""
+            pages.append({"page": i + 1, "text": page_text})
 
         # Extract metadata
         metadata = {}
         if pdf.metadata:
             for key, value in pdf.metadata.items():
                 if key.startswith("/"):
-                    key = key[1:]  # Remove leading slash
-                if isinstance(value, (str, int, float, bool)) and key not in (
-                    "Trapped"
-                ):
+                    key = key[1:]
+                if isinstance(value, (str, int, float, bool)) and key != "Trapped":
                     metadata[key] = str(value)
 
         # Extract form fields if present
@@ -227,18 +273,24 @@ class DocumentProcessor:
 
         return {
             "type": "pdf",
-            "page_count": len(pdf.pages),
+            "total_pages": total_pages,
+            "extracted_range": {"start_page": start_idx + 1, "end_page": end_idx},
+            "pages_extracted": len(pages),
             "content": pages,
             "metadata": metadata,
             "form_fields": form_fields,
         }
 
     @staticmethod
-    def _process_text(content: bytes) -> Dict[str, Any]:
+    def _process_text(
+        content: bytes, start_line: int = 1, end_line: int = None
+    ) -> Dict[str, Any]:
         """Process text content.
 
         Args:
             content: Text file content
+            start_line: First line to return (1-indexed). Default: 1
+            end_line: Last line to return (inclusive). None = start_line + 29
 
         Returns:
             Processed text information
@@ -252,23 +304,36 @@ class DocumentProcessor:
                 return {"error": "Failed to decode text content"}
 
         lines = text.splitlines()
+        total_lines = len(lines)
 
-        # Calculate some basic statistics
+        # Resolve range
+        start_idx = max(0, start_line - 1)
+        if end_line is None:
+            end_idx = start_idx + 30
+        else:
+            end_idx = end_line
+        end_idx = min(end_idx, total_lines)
+
+        if start_idx >= total_lines:
+            return {
+                "error": f"start_line ({start_line}) exceeds total lines ({total_lines})"
+            }
+
         word_count = len(text.split())
         char_count = len(text)
-        avg_line_length = char_count / len(lines) if lines else 0
+        avg_line_length = char_count / total_lines if total_lines else 0
 
-        # Try to detect if it's structured data like markdown or html
         is_markdown = text.count("#") > 0 and text.count("##") > 0
         is_html = text.count("<html") > 0 or text.count("<body") > 0
 
         return {
             "type": "text",
-            "line_count": len(lines),
+            "total_line_count": total_lines,
             "word_count": word_count,
             "character_count": char_count,
             "average_line_length": round(avg_line_length, 2),
-            "content": lines[:30],  # First 30 lines only
+            "extracted_range": {"start_line": start_idx + 1, "end_line": end_idx},
+            "content": lines[start_idx:end_idx],
             "format": (
                 "html" if is_html else ("markdown" if is_markdown else "plain_text")
             ),
