@@ -35,6 +35,8 @@ ENV/
 
 # Variant
 .env
+# per-site secrets — never commit
+envs/
 config/credentials.py
 *.pem
 *.key

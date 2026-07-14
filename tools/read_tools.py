@@ -253,14 +253,28 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            content = await graph_client.get_document_content(
+            content, tmp_path = await graph_client.get_document_content(
                 site_id, drive_id, item_id
             )
             processed_content = DocumentProcessor.process_document(
-                content, filename, start_page=start_page, end_page=end_page
+                content, filename,
+                start_page=start_page, end_page=end_page,
+                file_path=tmp_path,
             )
             logger.info(f"Successfully processed document content for: {filename}")
-            return json.dumps(processed_content, indent=2)
+            
+            result_str = json.dumps(processed_content, indent=2)
+            # Enforce MCP 1MB limit gracefully
+            if len(result_str) > 750_000:
+                logger.warning(f"Response too large ({len(result_str)} bytes). Returning warning to client.")
+                return json.dumps({
+                    "error": "Extracted content exceeds the 1MB MCP limit. Please request a smaller page/row range (e.g. 50 rows instead of 500).",
+                    "original_size_bytes": len(result_str),
+                    "type": processed_content.get("type", "unknown"),
+                    "total_rows": processed_content.get("total_rows") or processed_content.get("total_pages")
+                }, indent=2)
+                
+            return result_str
         except Exception as e:
             logger.error(f"Error in get_document_content: {str(e)}")
             raise
@@ -344,16 +358,27 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            content = await graph_client.get_document_content_by_path(
+            content, tmp_path = await graph_client.get_document_content_by_path(
                 site_id, drive_id, file_path
             )
             processed_content = DocumentProcessor.process_document(
-                content, filename, start_page=start_page, end_page=end_page
+                content, filename,
+                start_page=start_page, end_page=end_page,
+                file_path=tmp_path,
             )
             logger.info(
                 f"Successfully processed document content for path: '{file_path}'"
             )
-            return json.dumps(processed_content, indent=2)
+            
+            result_str = json.dumps(processed_content, indent=2)
+            if len(result_str) > 750_000:
+                logger.warning(f"Response too large ({len(result_str)} bytes). Returning warning to client.")
+                return json.dumps({
+                    "error": "Extracted content exceeds the 1MB MCP limit. Please request a smaller page/row range.",
+                    "original_size_bytes": len(result_str)
+                }, indent=2)
+                
+            return result_str
         except Exception as e:
             logger.error(f"Error in get_document_by_path: {str(e)}")
             raise
@@ -429,14 +454,26 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            content = await graph_client.get_document_content(
+            content, tmp_path = await graph_client.get_document_content(
                 site_id, drive_id, item_id
             )
+
+            # Large files are streamed to disk — read back for base64 encoding
+            if tmp_path:
+                import os
+                with open(tmp_path, "rb") as fh:
+                    content = fh.read()
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
             encoded = base64.b64encode(content).decode("utf-8")
             logger.info(
                 f"Successfully downloaded file: {filename} ({len(content)} bytes)"
             )
-            return json.dumps(
+            
+            result_str = json.dumps(
                 {
                     "filename": filename,
                     "size_bytes": len(content),
@@ -444,8 +481,90 @@ def register_read_tools(mcp: FastMCP):
                 },
                 indent=2,
             )
+            
+            if len(result_str) > 750_000:
+                logger.warning(f"Download response too large ({len(result_str)} bytes).")
+                return json.dumps({
+                    "error": f"File is too large to download directly as base64 (size: {len(content)} bytes). The MCP limit is 1MB.",
+                    "suggestion": "Please use 'get_document_content' to read and analyze the file contents instead of 'download_file'.",
+                    "filename": filename,
+                    "size_bytes": len(content)
+                }, indent=2)
+                
+            return result_str
         except Exception as e:
             logger.error(f"Error in download_file: {str(e)}")
+            raise
+
+    @mcp.tool()
+    async def query_document_data(
+        ctx: Context, site_id: str, drive_id: str, item_id: str, filename: str, sheet_name: str, query: str
+    ) -> str:
+        """Execute a Pandas DataFrame query on an Excel or CSV file.
+
+        This is highly recommended for large datasets (e.g. >10,000 rows) where
+        get_document_content would timeout or exceed the 1MB limit. The file is
+        loaded into a Pandas DataFrame `df` on the server, and your Python `query`
+        is executed against it.
+
+        Args:
+            site_id: ID of the site
+            drive_id: ID of the document library
+            item_id: ID of the file
+            filename: Name of the file (must be .csv, .xlsx, .xls, or .xlsb)
+            sheet_name: Name of the sheet to load (or "0" for the first sheet)
+            query: A valid Pandas Python expression using `df`. 
+                   Examples:
+                   - "df['Sales'].max()"
+                   - "df.groupby('Segment')['Revenue'].sum().to_dict()"
+                   - "df[df['Status'] == 'Active'].shape[0]"
+        """
+        logger.info(f"Tool called: query_document_data for file: {filename}")
+        try:
+            sp_ctx = ctx.request_context.lifespan_context
+            _check_auth(sp_ctx)
+            await refresh_token_if_needed(sp_ctx)
+            graph_client = GraphClient(sp_ctx)
+
+            # Stream large file to disk
+            content, tmp_path = await graph_client.get_document_content(
+                site_id, drive_id, item_id
+            )
+
+            # If it's a small file and wasn't streamed to disk, write it manually
+            if not tmp_path:
+                import tempfile
+                import os
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp")
+                tmp.write(content)
+                tmp.flush()
+                tmp_path = tmp.name
+
+            try:
+                # Execute the query
+                result = DocumentProcessor.query_dataframe(
+                    file_path=tmp_path,
+                    filename=filename,
+                    sheet_name=sheet_name if not sheet_name.isdigit() else int(sheet_name),
+                    query=query
+                )
+                
+                result_str = json.dumps(result, indent=2)
+                if len(result_str) > 750_000:
+                    return json.dumps({
+                        "error": "Query result is too large. Please aggregate the data further."
+                    })
+                return result_str
+            finally:
+                # Always cleanup the temp file
+                import os
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        except Exception as e:
+            logger.error(f"Error in query_document_data: {str(e)}")
             raise
 
     @mcp.tool()

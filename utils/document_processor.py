@@ -1,8 +1,9 @@
 """Document processing utilities for SharePoint MCP server."""
 
 import io
+import os
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Packages to support different file formats
 try:
@@ -15,6 +16,12 @@ try:
     HAS_DOCUMENT_LIBRARIES = True
 except ImportError:
     HAS_DOCUMENT_LIBRARIES = False
+
+try:
+    import pyxlsb  # noqa: F401 — required for Binary Excel .xlsb files
+    HAS_XLSB = True
+except ImportError:
+    HAS_XLSB = False
 
 # Setup logging
 logger = logging.getLogger("document_processor")
@@ -36,57 +43,146 @@ class DocumentProcessor:
 
     @staticmethod
     def process_document(
-        content: bytes,
+        content: bytes | None,
         filename: str,
         start_page: int = 1,
         end_page: int = None,
+        file_path: str | None = None,
     ) -> Dict[str, Any]:
         """Process document content based on file type.
 
         Args:
-            content: Document content as bytes
-            filename: Name of the file
-            start_page: First page/paragraph/line to extract (1-indexed, PDF/DOCX/TXT)
-            end_page: Last page/paragraph/line to extract (inclusive, None = auto limit)
+            content:   Document content as bytes (small files loaded in RAM).
+            filename:  Name of the file — used for format detection.
+            start_page: First page/paragraph/row/line to extract (1-indexed).
+            end_page:  Last to extract (inclusive). None = auto limit.
+            file_path: Path to a temp file on disk (large files streamed from Graph).
+                       When provided, 'content' must be None. The caller is
+                       responsible for deleting the temp file.
 
         Returns:
-            Processed document information
+            Processed document information dict.
         """
         if not DocumentProcessor.check_dependencies():
             return {"error": "Document processing libraries not installed"}
 
         file_ext = filename.lower().split(".")[-1] if "." in filename else ""
 
+        # Determine the data source
+        source_path: str | None = file_path        # disk path for large files
+        source_bytes: bytes | None = content       # in-memory bytes for small files
+
         try:
             if file_ext == "csv":
+                data = source_bytes or open(source_path, "rb").read()
                 return DocumentProcessor._process_csv(
-                    content, start_row=start_page, end_row=end_page
+                    data, start_row=start_page, end_row=end_page
                 )
-            elif file_ext == "xlsx":
+            elif file_ext in ("xlsx", "xls"):
                 return DocumentProcessor._process_excel(
-                    content, file_ext="xlsx", start_row=start_page, end_row=end_page
+                    source_bytes, file_ext=file_ext,
+                    start_row=start_page, end_row=end_page,
+                    file_path=source_path,
                 )
-            elif file_ext == "xls":
-                return DocumentProcessor._process_excel(
-                    content, file_ext="xls", start_row=start_page, end_row=end_page
+            elif file_ext == "xlsb":
+                return DocumentProcessor._process_xlsb(
+                    source_bytes, start_row=start_page, end_row=end_page,
+                    file_path=source_path,
                 )
             elif file_ext == "docx":
+                data = source_bytes or open(source_path, "rb").read()
                 return DocumentProcessor._process_word(
-                    content, start_para=start_page, end_para=end_page
+                    data, start_para=start_page, end_para=end_page
                 )
             elif file_ext == "pdf":
+                data = source_bytes or open(source_path, "rb").read()
                 return DocumentProcessor._process_pdf(
-                    content, start_page=start_page, end_page=end_page
+                    data, start_page=start_page, end_page=end_page
                 )
             elif file_ext in ("txt", "md", "html", "htm"):
+                data = source_bytes or open(source_path, "rb").read()
                 return DocumentProcessor._process_text(
-                    content, start_line=start_page, end_line=end_page
+                    data, start_line=start_page, end_line=end_page
                 )
             else:
                 return {"error": f"Unsupported file type: {file_ext}"}
         except Exception as e:
             logger.error(f"Error processing document: {str(e)}")
             return {"error": str(e)}
+        finally:
+            # Always clean up temp file if one was provided
+            if source_path:
+                try:
+                    os.remove(source_path)
+                    logger.debug(f"Deleted temp file: {source_path}")
+                except OSError:
+                    pass
+
+    @staticmethod
+    def query_dataframe(
+        file_path: str,
+        filename: str,
+        sheet_name: str | int = 0,
+        query: str = "",
+    ) -> Dict[str, Any]:
+        """Execute a pandas expression on a dataset securely on the server.
+
+        Args:
+            file_path: Path to the temp file on disk.
+            filename: Original filename to determine format.
+            sheet_name: Sheet to load (for Excel files).
+            query: Python expression to evaluate (e.g. "df['Sales'].sum()").
+        """
+        if not DocumentProcessor.check_dependencies():
+            return {"error": "Document processing libraries not installed"}
+
+        file_ext = filename.lower().split(".")[-1] if "." in filename else ""
+        
+        try:
+            logger.info(f"Loading {filename} (sheet={sheet_name}) for query...")
+            if file_ext == "csv":
+                df = pd.read_csv(file_path)
+            elif file_ext == "xlsb":
+                df = pd.read_excel(file_path, sheet_name=sheet_name, engine="pyxlsb")
+            elif file_ext == "xls":
+                df = pd.read_excel(file_path, sheet_name=sheet_name, engine="xlrd")
+            elif file_ext == "xlsx":
+                df = pd.read_excel(file_path, sheet_name=sheet_name, engine="openpyxl")
+            else:
+                return {"error": f"Unsupported format for querying: {file_ext}"}
+                
+            # Execute the query securely
+            logger.info(f"Executing query on DataFrame: {query}")
+            
+            # Simple local environment containing pandas and the dataframe
+            local_env = {"df": df, "pd": pd}
+            
+            import numpy as np
+            local_env["np"] = np
+
+            result = eval(query, {"__builtins__": {}}, local_env)
+            
+            # Convert result to string or JSON serializable format
+            if isinstance(result, pd.Series) or isinstance(result, pd.DataFrame):
+                # For safety, limit large returns even from queries
+                if len(result) > 1000:
+                    return {"error": f"Query returned {len(result)} rows. Please aggregate further (e.g. use .head() or .sum())."}
+                result_data = result.to_dict()
+            else:
+                # E.g. a float, int, str from aggregations
+                result_data = str(result)
+                
+            return {
+                "query": query,
+                "result": result_data,
+                "dataset_rows": len(df),
+                "dataset_columns": list(df.columns)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error querying dataframe: {str(e)}")
+            return {"error": f"Failed to execute query: {str(e)}"}
+
 
     @staticmethod
     def _process_csv(
@@ -108,7 +204,7 @@ class DocumentProcessor:
         # Resolve row range (convert 1-indexed to 0-indexed)
         start_idx = max(0, start_row - 1)
         if end_row is None:
-            end_idx = start_idx + 200  # default window: 200 rows
+            end_idx = start_idx + 500  # default window: 500 rows
         else:
             end_idx = end_row
         end_idx = min(end_idx, total_rows)
@@ -138,40 +234,28 @@ class DocumentProcessor:
 
     @staticmethod
     def _process_excel(
-        content: bytes,
+        content: bytes | None,
         file_ext: str = "xlsx",
         start_row: int = 1,
         end_row: int = None,
+        file_path: str | None = None,
     ) -> Dict[str, Any]:
         """Process Excel content (.xlsx and legacy .xls).
 
         Args:
-            content: Excel file content
-            file_ext: 'xlsx' or 'xls' — controls which engine is used.
+            content:  Excel file bytes (None when file_path is provided).
+            file_ext: 'xlsx' or 'xls'.
             start_row: First data row to return per sheet (1-indexed). Default 1.
-            end_row: Last data row to return per sheet (inclusive).
-                     None = start_row + 199 (200 rows). Pass total rows to read all.
-
-        Returns:
-            Processed data and analysis
+            end_row:  Last data row to return per sheet (inclusive).
+                      None = start_row + 499. Pass total rows to read all.
+            file_path: Path to temp file on disk (large files). Mutually
+                       exclusive with content.
         """
-        # Choose the correct engine: xlrd for legacy .xls, openpyxl for .xlsx
         engine = "xlrd" if file_ext == "xls" else "openpyxl"
         logger.info(f"Reading Excel file with engine: {engine}")
 
-        try:
-            df_dict = pd.read_excel(
-                io.BytesIO(content), sheet_name=None, engine=engine
-            )
-        except Exception as e:
-            # Fallback: if xlrd fails on an .xls try openpyxl (some .xls are actually .xlsx)
-            if engine == "xlrd":
-                logger.warning(f"xlrd failed ({e}), retrying with openpyxl")
-                df_dict = pd.read_excel(
-                    io.BytesIO(content), sheet_name=None, engine="openpyxl"
-                )
-            else:
-                raise
+        # Use file path directly if available — pandas reads from disk, not RAM
+        source = file_path if file_path else io.BytesIO(content)
 
         sheets = {}
         for sheet_name, df in df_dict.items():
@@ -180,7 +264,7 @@ class DocumentProcessor:
             # Resolve row range
             start_idx = max(0, start_row - 1)
             if end_row is None:
-                end_idx = start_idx + 200
+                end_idx = start_idx + 500  # default window: 500 rows
             else:
                 end_idx = end_row
             end_idx = min(end_idx, total_rows)
@@ -213,6 +297,82 @@ class DocumentProcessor:
             "type": "excel",
             "format": file_ext,
             "engine_used": engine,
+            "sheet_count": len(sheets),
+            "sheet_names": list(sheets.keys()),
+            "sheets": sheets,
+        }
+
+    @staticmethod
+    def _process_xlsb(
+        content: bytes | None,
+        start_row: int = 1,
+        end_row: int = None,
+        file_path: str | None = None,
+    ) -> Dict[str, Any]:
+        """Process Binary Excel content (.xlsb).
+
+        Args:
+            content:  Binary Excel bytes (None when file_path is provided).
+            start_row: First data row per sheet (1-indexed). Default 1.
+            end_row:  Last data row per sheet (inclusive).
+                      None = start_row + 499. Pass total rows to read all.
+            file_path: Path to temp file on disk (large files).
+        """
+        if not HAS_XLSB:
+            return {
+                "error": (
+                    ".xlsb files require the pyxlsb library. "
+                    "Install with: pip install pyxlsb"
+                )
+            }
+
+        logger.info("Reading Binary Excel (.xlsb) file with pyxlsb engine")
+        source = file_path if file_path else io.BytesIO(content)
+        try:
+            df_dict = pd.read_excel(source, sheet_name=None, engine="pyxlsb")
+        except Exception as e:
+            logger.error(f"Failed to read .xlsb file: {e}")
+            return {"error": f"Failed to read .xlsb file: {e}"}
+
+        sheets = {}
+        for sheet_name, df in df_dict.items():
+            total_rows = len(df)
+
+            start_idx = max(0, start_row - 1)
+            if end_row is None:
+                end_idx = start_idx + 500
+            else:
+                end_idx = end_row
+            end_idx = min(end_idx, total_rows)
+
+            df_slice = df.iloc[start_idx:end_idx] if start_idx < total_rows else df.iloc[0:0]
+
+            # Sanitize column names
+            df.columns = [
+                str(c) if not str(c).startswith("Unnamed") else f"Column_{i}"
+                for i, c in enumerate(df.columns)
+            ]
+            df_slice.columns = df.columns
+
+            sheets[sheet_name] = {
+                "total_rows": total_rows,
+                "extracted_range": {"start_row": start_idx + 1, "end_row": end_idx},
+                "rows_returned": len(df_slice),
+                "columns": list(df.columns),
+                "data": df_slice.to_dict(orient="records"),
+                "summary": {
+                    "numeric_columns": df.select_dtypes(
+                        include=["number"]
+                    ).columns.tolist(),
+                    "missing_values": df.isnull().sum().to_dict(),
+                    "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                },
+            }
+
+        return {
+            "type": "excel",
+            "format": "xlsb",
+            "engine_used": "pyxlsb",
             "sheet_count": len(sheets),
             "sheet_names": list(sheets.keys()),
             "sheets": sheets,

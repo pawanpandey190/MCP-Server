@@ -1,11 +1,19 @@
 """Drive, file, and folder operations mixin for GraphClient."""
 
 import logging
-from typing import Dict, Any, List
+import tempfile
+import os
+from typing import Dict, Any, List, Tuple
 
 import requests
 
-from utils._graph_constants import LARGE_FILE_THRESHOLD, UPLOAD_CHUNK_SIZE  # noqa: F401
+from utils._graph_constants import (
+    LARGE_FILE_THRESHOLD,
+    UPLOAD_CHUNK_SIZE,  # noqa: F401
+    DOWNLOAD_TIMEOUT_SECONDS,
+    STREAM_THRESHOLD_BYTES,
+    STREAM_CHUNK_SIZE,
+)
 
 logger = logging.getLogger("graph_client")
 
@@ -15,8 +23,15 @@ class _GraphDriveOpsMixin:
 
     async def get_document_content(
         self, site_id: str, drive_id: str, item_id: str
-    ) -> bytes:
-        """Get content of a document by item ID."""
+    ) -> Tuple[bytes | None, str | None]:
+        """Get content of a document by item ID.
+
+        Returns:
+            (bytes, None)      — for files < STREAM_THRESHOLD_BYTES (loaded in memory)
+            (None, tmp_path)   — for large files (streamed to a temp file on disk)
+
+        The caller is responsible for deleting the temp file when done.
+        """
         url = (
             f"{self.base_url}/sites/{site_id}/drives/{drive_id}/items/{item_id}/content"
         )
@@ -24,14 +39,42 @@ class _GraphDriveOpsMixin:
         headers.pop("Content-Type", None)
 
         logger.info(f"Getting document content for item {item_id}")
-        response = requests.get(url, headers=headers, stream=True)
+        response = requests.get(
+            url, headers=headers, stream=True, timeout=DOWNLOAD_TIMEOUT_SECONDS
+        )
 
         if response.status_code != 200:
             error_text = response.text
             logger.error(f"Graph API error: {response.status_code} - {error_text}")
             raise Exception(f"Graph API error: {response.status_code} - {error_text}")
 
-        return response.content
+        # Check Content-Length header to decide: stream to disk or load into RAM
+        content_length = int(response.headers.get("Content-Length", 0))
+        logger.info(f"File size from headers: {content_length} bytes")
+
+        if content_length > STREAM_THRESHOLD_BYTES or content_length == 0:
+            # Stream to a temp file — safe for files of any size
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp")
+            try:
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=STREAM_CHUNK_SIZE):
+                    if chunk:
+                        tmp.write(chunk)
+                        downloaded += len(chunk)
+                        logger.debug(f"Streamed {downloaded} bytes so far...")
+                tmp.flush()
+                tmp_path = tmp.name
+            finally:
+                tmp.close()
+            logger.info(
+                f"Large file streamed to disk: {tmp_path} ({downloaded} bytes)"
+            )
+            return None, tmp_path
+        else:
+            # Small file — load into RAM as before
+            content = b"".join(response.iter_content(chunk_size=STREAM_CHUNK_SIZE))
+            logger.info(f"Small file loaded into RAM: {len(content)} bytes")
+            return content, None
 
     async def upload_document(
         self,
@@ -415,8 +458,13 @@ class _GraphDriveOpsMixin:
 
     async def get_document_content_by_path(
         self, site_id: str, drive_id: str, file_path: str
-    ) -> bytes:
-        """Get content of a document by its path in a document library."""
+    ) -> Tuple[bytes | None, str | None]:
+        """Get content of a document by its path.
+
+        Returns:
+            (bytes, None)      — for files < STREAM_THRESHOLD_BYTES
+            (None, tmp_path)   — for large files (streamed to a temp file on disk)
+        """
         clean_path = file_path.strip("/")
         url = f"{self.base_url}/sites/{site_id}/drives/{drive_id}/root:/{clean_path}:/content"
 
@@ -424,14 +472,38 @@ class _GraphDriveOpsMixin:
         headers.pop("Content-Type", None)
 
         logger.info(f"Getting document content by path: '{file_path}'")
-        response = requests.get(url, headers=headers, stream=True)
+        response = requests.get(
+            url, headers=headers, stream=True, timeout=DOWNLOAD_TIMEOUT_SECONDS
+        )
 
         if response.status_code != 200:
             error_text = response.text
             logger.error(f"Graph API error: {response.status_code} - {error_text}")
             raise Exception(f"Graph API error: {response.status_code} - {error_text}")
 
-        return response.content
+        content_length = int(response.headers.get("Content-Length", 0))
+        logger.info(f"File size from headers: {content_length} bytes")
+
+        if content_length > STREAM_THRESHOLD_BYTES or content_length == 0:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp")
+            try:
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=STREAM_CHUNK_SIZE):
+                    if chunk:
+                        tmp.write(chunk)
+                        downloaded += len(chunk)
+                tmp.flush()
+                tmp_path = tmp.name
+            finally:
+                tmp.close()
+            logger.info(
+                f"Large file streamed to disk: {tmp_path} ({downloaded} bytes)"
+            )
+            return None, tmp_path
+        else:
+            content = b"".join(response.iter_content(chunk_size=STREAM_CHUNK_SIZE))
+            logger.info(f"Small file loaded into RAM: {len(content)} bytes")
+            return content, None
 
     async def get_item_metadata_by_path(
         self, site_id: str, drive_id: str, item_path: str
