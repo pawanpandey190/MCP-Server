@@ -10,6 +10,7 @@ try:
     import docx
     from PyPDF2 import PdfReader
     import openpyxl  # noqa: F401
+    import xlrd      # noqa: F401 — required for legacy .xls files
 
     HAS_DOCUMENT_LIBRARIES = True
 except ImportError:
@@ -58,9 +59,17 @@ class DocumentProcessor:
 
         try:
             if file_ext == "csv":
-                return DocumentProcessor._process_csv(content)
-            elif file_ext in ("xlsx", "xls"):
-                return DocumentProcessor._process_excel(content)
+                return DocumentProcessor._process_csv(
+                    content, start_row=start_page, end_row=end_page
+                )
+            elif file_ext == "xlsx":
+                return DocumentProcessor._process_excel(
+                    content, file_ext="xlsx", start_row=start_page, end_row=end_page
+                )
+            elif file_ext == "xls":
+                return DocumentProcessor._process_excel(
+                    content, file_ext="xls", start_row=start_page, end_row=end_page
+                )
             elif file_ext == "docx":
                 return DocumentProcessor._process_word(
                     content, start_para=start_page, end_para=end_page
@@ -80,48 +89,117 @@ class DocumentProcessor:
             return {"error": str(e)}
 
     @staticmethod
-    def _process_csv(content: bytes) -> Dict[str, Any]:
+    def _process_csv(
+        content: bytes, start_row: int = 1, end_row: int = None
+    ) -> Dict[str, Any]:
         """Process CSV content.
 
         Args:
             content: CSV file content
+            start_row: First data row to return (1-indexed, excludes header). Default 1.
+            end_row: Last data row to return (inclusive). None = start_row + 199 (200 rows).
 
         Returns:
             Processed data and analysis
         """
         df = pd.read_csv(io.BytesIO(content))
+        total_rows = len(df)
+
+        # Resolve row range (convert 1-indexed to 0-indexed)
+        start_idx = max(0, start_row - 1)
+        if end_row is None:
+            end_idx = start_idx + 200  # default window: 200 rows
+        else:
+            end_idx = end_row
+        end_idx = min(end_idx, total_rows)
+
+        if start_idx >= total_rows:
+            return {
+                "error": f"start_row ({start_row}) exceeds total rows ({total_rows})",
+                "total_rows": total_rows,
+                "columns": list(df.columns),
+            }
+
+        df_slice = df.iloc[start_idx:end_idx]
+
         return {
             "type": "csv",
-            "rows": len(df),
+            "total_rows": total_rows,
+            "extracted_range": {"start_row": start_idx + 1, "end_row": end_idx},
+            "rows_returned": len(df_slice),
             "columns": list(df.columns),
-            "preview": df.head(5).to_dict(orient="records"),
+            "data": df_slice.to_dict(orient="records"),
             "summary": {
-                "numeric_columns": df.select_dtypes(
-                    include=["number"]
-                ).columns.tolist(),
+                "numeric_columns": df.select_dtypes(include=["number"]).columns.tolist(),
                 "missing_values": df.isnull().sum().to_dict(),
                 "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
             },
         }
 
     @staticmethod
-    def _process_excel(content: bytes) -> Dict[str, Any]:
-        """Process Excel content.
+    def _process_excel(
+        content: bytes,
+        file_ext: str = "xlsx",
+        start_row: int = 1,
+        end_row: int = None,
+    ) -> Dict[str, Any]:
+        """Process Excel content (.xlsx and legacy .xls).
 
         Args:
             content: Excel file content
+            file_ext: 'xlsx' or 'xls' — controls which engine is used.
+            start_row: First data row to return per sheet (1-indexed). Default 1.
+            end_row: Last data row to return per sheet (inclusive).
+                     None = start_row + 199 (200 rows). Pass total rows to read all.
 
         Returns:
             Processed data and analysis
         """
-        df_dict = pd.read_excel(io.BytesIO(content), sheet_name=None)
-        sheets = {}
+        # Choose the correct engine: xlrd for legacy .xls, openpyxl for .xlsx
+        engine = "xlrd" if file_ext == "xls" else "openpyxl"
+        logger.info(f"Reading Excel file with engine: {engine}")
 
+        try:
+            df_dict = pd.read_excel(
+                io.BytesIO(content), sheet_name=None, engine=engine
+            )
+        except Exception as e:
+            # Fallback: if xlrd fails on an .xls try openpyxl (some .xls are actually .xlsx)
+            if engine == "xlrd":
+                logger.warning(f"xlrd failed ({e}), retrying with openpyxl")
+                df_dict = pd.read_excel(
+                    io.BytesIO(content), sheet_name=None, engine="openpyxl"
+                )
+            else:
+                raise
+
+        sheets = {}
         for sheet_name, df in df_dict.items():
+            total_rows = len(df)
+
+            # Resolve row range
+            start_idx = max(0, start_row - 1)
+            if end_row is None:
+                end_idx = start_idx + 200
+            else:
+                end_idx = end_row
+            end_idx = min(end_idx, total_rows)
+
+            df_slice = df.iloc[start_idx:end_idx] if start_idx < total_rows else df.iloc[0:0]
+
+            # Sanitize column names (some legacy .xls files have unnamed columns)
+            df.columns = [
+                str(c) if not str(c).startswith("Unnamed") else f"Column_{i}"
+                for i, c in enumerate(df.columns)
+            ]
+            df_slice.columns = df.columns
+
             sheets[sheet_name] = {
-                "rows": len(df),
+                "total_rows": total_rows,
+                "extracted_range": {"start_row": start_idx + 1, "end_row": end_idx},
+                "rows_returned": len(df_slice),
                 "columns": list(df.columns),
-                "preview": df.head(5).to_dict(orient="records"),
+                "data": df_slice.to_dict(orient="records"),
                 "summary": {
                     "numeric_columns": df.select_dtypes(
                         include=["number"]
@@ -131,7 +209,14 @@ class DocumentProcessor:
                 },
             }
 
-        return {"type": "excel", "sheet_count": len(sheets), "sheets": sheets}
+        return {
+            "type": "excel",
+            "format": file_ext,
+            "engine_used": engine,
+            "sheet_count": len(sheets),
+            "sheet_names": list(sheets.keys()),
+            "sheets": sheets,
+        }
 
     @staticmethod
     def _process_word(

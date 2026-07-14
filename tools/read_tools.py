@@ -7,7 +7,7 @@ import logging
 from mcp.server.fastmcp import FastMCP, Context
 
 from auth.sharepoint_auth import refresh_token_if_needed
-from config.settings import SHAREPOINT_CONFIG
+from config.settings import SHAREPOINT_CONFIG, SITES
 from tools._tool_helpers import _check_auth
 from utils.document_processor import DocumentProcessor
 from utils.graph_client import GraphClient
@@ -18,30 +18,68 @@ logger = logging.getLogger("sharepoint_tools")
 def register_read_tools(mcp: FastMCP):
     """Register read-only SharePoint tools with the MCP server."""
 
+    # ------------------------------------------------------------------
+    # Helper: resolve site URL from an optional site_name argument
+    # ------------------------------------------------------------------
+    def _resolve_site_url(site_name: str | None) -> str:
+        """Return the URL for *site_name*, or the default site if None."""
+        if not site_name:
+            return SHAREPOINT_CONFIG["site_url"]
+        url = SITES.get(site_name)
+        if not url:
+            available = ", ".join(SITES.keys()) or "none configured"
+            raise ValueError(
+                f"Unknown site name '{site_name}'. "
+                f"Available sites: {available}. "
+                f"Call list_available_sites to see all options."
+            )
+        return url
+
     @mcp.tool()
-    async def get_site_info(ctx: Context) -> str:
-        """Get basic information about the SharePoint site."""
-        logger.info("Tool called: get_site_info")
+    async def list_available_sites(ctx: Context) -> str:
+        """List all SharePoint sites configured in this MCP server.
+
+        Returns each site's display name and URL.
+        Use the 'name' field as the site_name argument in other tools
+        (get_site_info, list_document_libraries, search_sharepoint) to
+        target a specific site.
+        """
+        logger.info("Tool called: list_available_sites")
+        result = [
+            {"name": name, "url": url} for name, url in SITES.items()
+        ]
+        logger.info(f"Returning {len(result)} configured sites")
+        return json.dumps(result, indent=2)
+
+    @mcp.tool()
+    async def get_site_info(ctx: Context, site_name: str = None) -> str:
+        """Get basic information about a SharePoint site.
+
+        Args:
+            site_name: Display name of the site to query (e.g. "Home",
+                "HR Portal"). Leave empty to use the default site.
+                Call list_available_sites to see all configured options.
+        """
+        logger.info(f"Tool called: get_site_info site_name={site_name!r}")
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_parts = (
-                SHAREPOINT_CONFIG["site_url"].replace("https://", "").split("/")
-            )
+            site_url = _resolve_site_url(site_name)
+            site_parts = site_url.replace("https://", "").split("/")
             domain = site_parts[0]
-            site_name = site_parts[2] if len(site_parts) > 2 else "root"
-            logger.info(f"Getting info for site: {site_name} in domain: {domain}")
+            site_name_path = site_parts[2] if len(site_parts) > 2 else "root"
+            logger.info(f"Getting info for site: {site_name_path} in domain: {domain}")
 
-            site_info = await graph_client.get_site_info(domain, site_name)
+            site_info = await graph_client.get_site_info(domain, site_name_path)
             result = {
                 "name": site_info.get("displayName", "Unknown"),
                 "description": site_info.get("description", "No description"),
                 "created": site_info.get("createdDateTime", "Unknown"),
                 "last_modified": site_info.get("lastModifiedDateTime", "Unknown"),
-                "web_url": site_info.get("webUrl", SHAREPOINT_CONFIG["site_url"]),
+                "web_url": site_info.get("webUrl", site_url),
                 "id": site_info.get("id", "Unknown"),
             }
             logger.info(f"Successfully retrieved site info for: {result['name']}")
@@ -51,26 +89,52 @@ def register_read_tools(mcp: FastMCP):
             raise
 
     @mcp.tool()
-    async def list_document_libraries(ctx: Context) -> str:
-        """List all document libraries in the SharePoint site."""
-        logger.info("Tool called: list_document_libraries")
+    async def list_document_libraries(ctx: Context, site_name: str = None) -> str:
+        """List all document libraries in a SharePoint site.
+
+        Args:
+            site_name: Display name of the site to query (e.g. "Home",
+                "HR Portal"). Leave empty to use the default site.
+                Call list_available_sites to see all configured options.
+        """
+        logger.info(f"Tool called: list_document_libraries site_name={site_name!r}")
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_parts = (
-                SHAREPOINT_CONFIG["site_url"].replace("https://", "").split("/")
-            )
+            site_url = _resolve_site_url(site_name)
+            site_parts = site_url.replace("https://", "").split("/")
             domain = site_parts[0]
-            site_name = site_parts[2] if len(site_parts) > 2 else "root"
+            site_name_path = site_parts[2] if len(site_parts) > 2 else "root"
             logger.info(
-                f"Listing document libraries for site: {site_name} in domain: {domain}"
+                f"Listing document libraries for site: {site_name_path} in domain: {domain}"
             )
 
-            result = await graph_client.list_document_libraries(domain, site_name)
+            result = await graph_client.list_document_libraries(domain, site_name_path)
             drives = result.get("value", [])
+
+            # SharePoint returns ALL drives including hidden system libraries.
+            # We filter those out so Claude only sees real, user-facing libraries.
+            # System libraries have well-known names and driveType != "documentLibrary".
+            SYSTEM_LIBRARY_NAMES = {
+                "site assets",
+                "style library",
+                "form templates",
+                "site pages",
+                "preservation hold library",
+                "content and structure reports",
+                "reusable content",
+                "solution gallery",
+                "theme gallery",
+                "master page gallery",
+                "list template gallery",
+                "web part gallery",
+                "site collection images",
+                "sharepoint lists",
+            }
+
             formatted_drives = [
                 {
                     "name": drive.get("name", "Unknown"),
@@ -80,6 +144,8 @@ def register_read_tools(mcp: FastMCP):
                     "id": drive.get("id", "Unknown"),
                 }
                 for drive in drives
+                # Keep only drives whose names are NOT in the system library blocklist
+                if drive.get("name", "").lower() not in SYSTEM_LIBRARY_NAMES
             ]
             logger.info(
                 f"Successfully retrieved {len(formatted_drives)} document libraries"
@@ -90,27 +156,31 @@ def register_read_tools(mcp: FastMCP):
             raise
 
     @mcp.tool()
-    async def search_sharepoint(ctx: Context, query: str) -> str:
-        """Search content in the SharePoint site.
+    async def search_sharepoint(ctx: Context, query: str, site_name: str = None) -> str:
+        """Search content in a SharePoint site.
 
         Args:
             query: Search query string
+            site_name: Display name of the site to search (e.g. "Home",
+                "HR Portal"). Leave empty to search the default site.
+                Call list_available_sites to see all configured options.
         """
-        logger.info(f"Tool called: search_sharepoint with query: {query}")
+        logger.info(
+            f"Tool called: search_sharepoint query={query!r} site_name={site_name!r}"
+        )
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_parts = (
-                SHAREPOINT_CONFIG["site_url"].replace("https://", "").split("/")
-            )
+            site_url = _resolve_site_url(site_name)
+            site_parts = site_url.replace("https://", "").split("/")
             domain = site_parts[0]
-            site_name = site_parts[2] if len(site_parts) > 2 else "root"
-            logger.info(f"Searching for '{query}' in site: {site_name}")
+            site_name_path = site_parts[2] if len(site_parts) > 2 else "root"
+            logger.info(f"Searching for '{query}' in site: {site_name_path}")
 
-            site_info = await graph_client.get_site_info(domain, site_name)
+            site_info = await graph_client.get_site_info(domain, site_name_path)
             site_id = site_info.get("id")
             if not site_id:
                 raise Exception("Error: Could not retrieve site ID")

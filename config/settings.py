@@ -15,6 +15,8 @@ SHAREPOINT_CONFIG = {
     "tenant_id": os.getenv("TENANT_ID", ""),
     "client_id": os.getenv("CLIENT_ID", ""),
     "client_secret": os.getenv("CLIENT_SECRET", ""),
+    # Legacy single-site key — kept for backward compatibility.
+    # Prefer SITE_1_URL / SITE_2_URL / ... for multi-site setups.
     "site_url": os.getenv("SITE_URL", ""),
     "username": os.getenv("USERNAME", ""),
     "password": os.getenv("PASSWORD", ""),
@@ -27,6 +29,39 @@ SHAREPOINT_CONFIG = {
         # - Files.ReadWrite.All (for document operations)
     ],
 }
+
+# ---------------------------------------------------------------------------
+# Multi-site registry
+# ---------------------------------------------------------------------------
+# Reads SITE_1_URL / SITE_1_NAME, SITE_2_URL / SITE_2_NAME, … from the env.
+# Falls back to the legacy SITE_URL if no numbered entries are found so that
+# existing single-site deployments continue to work without any .env changes.
+#
+# Example .env:
+#   SITE_1_URL=https://contoso.sharepoint.com/sites/home
+#   SITE_1_NAME=Home
+#   SITE_2_URL=https://contoso.sharepoint.com/sites/HR
+#   SITE_2_NAME=HR Portal
+# ---------------------------------------------------------------------------
+SITES: dict[str, str] = {}  # {display_name: site_url}
+
+_idx = 1
+while True:
+    _url = os.getenv(f"SITE_{_idx}_URL", "").strip()
+    if not _url:
+        break
+    _name = os.getenv(f"SITE_{_idx}_NAME", f"Site {_idx}").strip()
+    SITES[_name] = _url
+    _idx += 1
+
+# Backward-compat fallback: honour the plain SITE_URL if no numbered sites
+if not SITES and SHAREPOINT_CONFIG["site_url"]:
+    SITES["Default"] = SHAREPOINT_CONFIG["site_url"]
+
+# Keep site_url pointing at the first registered site so legacy code works
+if SITES and not SHAREPOINT_CONFIG["site_url"]:
+    SHAREPOINT_CONFIG["site_url"] = next(iter(SITES.values()))
+
 
 # Microsoft Graph API settings
 GRAPH_API_VERSION = "v1.0"
