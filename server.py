@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from auth.sharepoint_auth import SharePointContext, get_auth_context
 from config.settings import APP_NAME, DEBUG
@@ -53,8 +54,34 @@ async def sharepoint_lifespan(server: FastMCP) -> AsyncIterator[SharePointContex
         logger.info("Ending SharePoint connection...")
 
 
+# ---------------------------------------------------------------------------
+# Transport Security — restrict which Host headers and Origins are accepted.
+# MCP_ALLOWED_HOSTS should be set per-container in docker-compose.yml so that
+# each container only accepts requests directed at its own service name.
+# Default covers the Docker service name + loopback addresses.
+# ---------------------------------------------------------------------------
+_allowed_hosts = [
+    h.strip()
+    for h in os.getenv(
+        "MCP_ALLOWED_HOSTS",
+        "sharepoint-mcp:*,localhost:*,127.0.0.1:*,[::1]:*",
+    ).split(",")
+    if h.strip()
+]
+
 # Create MCP server at module level so CLI can find it
-mcp = FastMCP(APP_NAME, lifespan=sharepoint_lifespan)
+mcp = FastMCP(
+    APP_NAME,
+    lifespan=sharepoint_lifespan,
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=_allowed_hosts,
+        allowed_origins=[
+            f"http://{h}" for h in _allowed_hosts
+        ] + [
+            f"https://{h}" for h in _allowed_hosts
+        ],
+    ),
+)
 
 # Register tools
 register_site_tools(mcp)

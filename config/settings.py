@@ -69,12 +69,13 @@ GRAPH_BASE_URL = f"https://graph.microsoft.com/{GRAPH_API_VERSION}"
 
 # Document processing settings
 DOCUMENT_PROCESSING = {
-    "max_text_preview_length": 5000,  # Maximum characters for text preview
-    "max_rows_preview": 50,  # Maximum rows for CSV/Excel preview
+    "max_text_preview_length": 50000,  # Maximum characters for text preview
+    "max_rows_preview": 500,           # Maximum rows for CSV/Excel preview
     "supported_extensions": [
         "csv",
         "xlsx",
         "xls",
+        "xlsb",
         "docx",
         "pdf",
         "txt",

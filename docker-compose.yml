@@ -1,12 +1,175 @@
+# =============================================================================
+#  NBC Bearings — SharePoint MCP  |  Production docker-compose.yml
+#  One container per SharePoint site, all on an internal bridge network.
+#  Your custom application is the ONLY public entry-point; MCP containers
+#  are never reachable from outside the VM.
+#
+#  Port mapping  (host:container)
+#    mcp-rd           → 8001:8000
+#    mcp-manufacturing→ 8002:8000
+#    mcp-qa           → 8003:8000
+#    mcp-sales        → 8004:8000
+#    mcp-hr           → 8005:8000
+#    mcp-finance      → 8006:8000
+#    mcp-logistics    → 8007:8000
+#    mcp-gm           → 8008:8000
+#    mcp-ir           → 8009:8000
+#    mcp-scm          → 8010:8000
+#    mcp-nei          → 8011:8000
+#
+#  From your custom app, reach containers by name on the internal network:
+#    http://mcp-rd:8000/mcp
+#    http://mcp-manufacturing:8000/mcp  … etc.
+# =============================================================================
+
+networks:
+  mcp-internal:
+    driver: bridge
+    # No external access — containers talk only to your custom app
+    internal: false   # set to true if your custom-app is also in this compose
+
+# ---------------------------------------------------------------------------
+# Shared image build  (all sites use the same image, only env differs)
+# ---------------------------------------------------------------------------
+x-mcp-common: &mcp-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  networks:
+    - mcp-internal
+  healthcheck:
+    test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost',8000)); s.close()\""]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 20s
+  # No memory/CPU limits — each container uses what it needs dynamically.
+  # Finance may peak at 3GB for large xlsb files; HR may use 200MB.
+  # The OS scheduler handles fair resource sharing across containers.
+
+# ---------------------------------------------------------------------------
+# Services — one per SharePoint site
+# ---------------------------------------------------------------------------
 services:
-  sharepoint-mcp:
-    build: .
+
+  # ── Research & Development ─────────────────────────────────────────────────
+  mcp-rd:
+    <<: *mcp-common
+    container_name: mcp-rd
+    env_file: envs/mcp-rd.env
     ports:
       - "8001:8000"
-    env_file:
-      - .env
-    environment:
-      - MCP_TRANSPORT=streamable-http
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8000
-    restart: unless-stopped
+    labels:
+      com.nbcbearings.site: "Research & Development"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/researchanddevelopment"
+
+  # ── Manufacturing ──────────────────────────────────────────────────────────
+  mcp-manufacturing:
+    <<: *mcp-common
+    container_name: mcp-manufacturing
+    env_file: envs/mcp-manufacturing.env
+    ports:
+      - "8002:8000"
+    labels:
+      com.nbcbearings.site: "Manufacturing"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/manufacturing"
+
+  # ── Quality Assurance ──────────────────────────────────────────────────────
+  mcp-qa:
+    <<: *mcp-common
+    container_name: mcp-qa
+    env_file: envs/mcp-qa.env
+    ports:
+      - "8003:8000"
+    labels:
+      com.nbcbearings.site: "Quality Assurance"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/qualityassurance"
+
+  # ── Sales & Marketing ──────────────────────────────────────────────────────
+  mcp-sales:
+    <<: *mcp-common
+    container_name: mcp-sales
+    env_file: envs/mcp-sales.env
+    ports:
+      - "8004:8000"
+    labels:
+      com.nbcbearings.site: "Sales & Marketing"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/salesmarketing"
+
+  # ── Human Resources ────────────────────────────────────────────────────────
+  mcp-hr:
+    <<: *mcp-common
+    container_name: mcp-hr
+    env_file: envs/mcp-hr.env
+    ports:
+      - "8005:8000"
+    labels:
+      com.nbcbearings.site: "Human Resources"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/hr"
+
+  # ── Finance ────────────────────────────────────────────────────────────────
+  mcp-finance:
+    <<: *mcp-common
+    container_name: mcp-finance
+    env_file: envs/mcp-finance.env
+    ports:
+      - "8006:8000"
+    labels:
+      com.nbcbearings.site: "Finance"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/Finance"
+
+  # ── Central Logistics & Stores ─────────────────────────────────────────────
+  mcp-logistics:
+    <<: *mcp-common
+    container_name: mcp-logistics
+    env_file: envs/mcp-logistics.env
+    ports:
+      - "8007:8000"
+    labels:
+      com.nbcbearings.site: "Central Logistics & Stores"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/centrallogistics-stores"
+
+  # ── General Management ─────────────────────────────────────────────────────
+  mcp-gm:
+    <<: *mcp-common
+    container_name: mcp-gm
+    env_file: envs/mcp-gm.env
+    ports:
+      - "8008:8000"
+    labels:
+      com.nbcbearings.site: "General Management"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/GeneralManagement"
+
+  # ── IR (Industrial Relations) ──────────────────────────────────────────────
+  mcp-ir:
+    <<: *mcp-common
+    container_name: mcp-ir
+    env_file: envs/mcp-ir.env
+    ports:
+      - "8009:8000"
+    labels:
+      com.nbcbearings.site: "IR"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/ir"
+
+  # ── Supply Chain Management ────────────────────────────────────────────────
+  mcp-scm:
+    <<: *mcp-common
+    container_name: mcp-scm
+    env_file: envs/mcp-scm.env
+    ports:
+      - "8010:8000"
+    labels:
+      com.nbcbearings.site: "Supply Chain Management"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/SCM"
+
+  # ── NEI Amsted ─────────────────────────────────────────────────────────────
+  mcp-nei:
+    <<: *mcp-common
+    container_name: mcp-nei
+    env_file: envs/mcp-nei.env
+    ports:
+      - "8011:8000"
+    labels:
+      com.nbcbearings.site: "NEI Amsted"
+      com.nbcbearings.url: "https://nbcbearingsrj.sharepoint.com/sites/nei-amsted"

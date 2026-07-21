@@ -5,7 +5,7 @@ from typing import Dict, Any, Union, BinaryIO
 
 import requests
 
-from utils._graph_constants import UPLOAD_CHUNK_SIZE
+from utils._graph_constants import UPLOAD_CHUNK_SIZE, DOWNLOAD_TIMEOUT_SECONDS
 
 logger = logging.getLogger("graph_client")
 
@@ -19,7 +19,7 @@ class _GraphHttpMixin:
         logger.debug(f"Making GET request to: {url}")
 
         headers = self.context.headers
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         logger.debug(f"Response status code: {response.status_code}")
 
         if response.status_code != 200:
@@ -41,7 +41,7 @@ class _GraphHttpMixin:
         logger.debug(f"With data: {data}")
 
         headers = self.context.headers
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         logger.debug(f"Response status code: {response.status_code}")
 
         if response.status_code not in (200, 201):
@@ -63,7 +63,7 @@ class _GraphHttpMixin:
         logger.debug(f"With data: {data}")
 
         headers = self.context.headers
-        response = requests.patch(url, headers=headers, json=data)
+        response = requests.patch(url, headers=headers, json=data, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         logger.debug(f"Response status code: {response.status_code}")
 
         if response.status_code not in (200, 201, 204):
@@ -81,7 +81,7 @@ class _GraphHttpMixin:
         logger.debug(f"Making DELETE request to: {url}")
 
         headers = self.context.headers
-        response = requests.delete(url, headers=headers)
+        response = requests.delete(url, headers=headers, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         logger.debug(f"Response status code: {response.status_code}")
 
         if response.status_code not in (200, 201, 204):
@@ -105,7 +105,7 @@ class _GraphHttpMixin:
         if content_type:
             headers["Content-Type"] = content_type
 
-        response = requests.put(url, headers=headers, data=file_content)
+        response = requests.put(url, headers=headers, data=file_content, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         logger.debug(f"Response status code: {response.status_code}")
 
         if response.status_code not in (200, 201, 204):
@@ -140,7 +140,7 @@ class _GraphHttpMixin:
                 headers["Content-Type"] = content_type
 
             logger.debug(f"Uploading chunk: bytes {start}-{end}/{total_size}")
-            response = requests.put(upload_url, headers=headers, data=chunk)
+            response = requests.put(upload_url, headers=headers, data=chunk, timeout=DOWNLOAD_TIMEOUT_SECONDS)
 
             if response.status_code not in (200, 201, 202):
                 raise Exception(
