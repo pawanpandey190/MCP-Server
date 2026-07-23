@@ -257,8 +257,12 @@ class DocumentProcessor:
         # Use file path directly if available — pandas reads from disk, not RAM
         source = file_path if file_path else io.BytesIO(content)
 
+        # Read all sheets at once; sheet_name=None returns {sheet_name: DataFrame}
+        df_dict = pd.read_excel(source, sheet_name=None, engine=engine, header=0)
+
         sheets = {}
         for sheet_name, df in df_dict.items():
+
             total_rows = len(df)
 
             # Resolve row range
