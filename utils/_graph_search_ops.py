@@ -33,7 +33,7 @@ class _GraphSearchOpsMixin:
                     "query": {
                         "queryString": query_string
                     },
-                    "region": "NAM"  # Required for Application (App-Only) permissions
+                    "region": "IND"  # Required for Application (App-Only) permissions
                 }
             ]
         }
