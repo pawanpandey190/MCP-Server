@@ -368,3 +368,39 @@ async def test_create_site(mock_post, graph_client):
     assert sent_body["displayName"] == "My Site"
     assert sent_body["alias"] == "mysite"
     assert sent_body["description"] == "A test site"
+
+
+@patch("requests.post")
+async def test_search_content(mock_post, graph_client):
+    """Test search_content sends POST with correct search query payload."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "value": [
+            {
+                "hitsContainers": [
+                    {
+                        "hits": [
+                            {"resource": {"name": "test.pdf"}}
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    mock_post.return_value = mock_response
+
+    # Search with site URL constraint
+    result = await graph_client.search_content("finance report", "https://tenant.sharepoint.com/sites/Finance")
+    
+    assert "value" in result
+    assert result["value"][0]["hitsContainers"][0]["hits"][0]["resource"]["name"] == "test.pdf"
+    
+    call_url = mock_post.call_args[0][0]
+    assert "search/query" in call_url
+    
+    sent_body = mock_post.call_args[1]["json"]
+    requests_payload = sent_body.get("requests", [])
+    assert len(requests_payload) == 1
+    assert "finance report" in requests_payload[0]["query"]["queryString"]
+    assert "Path:\"https://tenant.sharepoint.com/sites/Finance\"" in requests_payload[0]["query"]["queryString"]

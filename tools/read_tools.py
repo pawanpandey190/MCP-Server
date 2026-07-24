@@ -651,3 +651,50 @@ def register_read_tools(mcp: FastMCP):
         except Exception as e:
             logger.error(f"Error in get_list_items: {str(e)}")
             raise
+
+    @mcp.tool()
+    async def search_site_content(ctx: Context, query: str, site_name: str = None) -> str:
+        """Search the deep content of all documents and lists in a SharePoint site.
+        
+        Unlike search_sharepoint which only matches filenames, this uses Microsoft Search
+        to perform full-text search inside the actual contents of PDFs, Word docs, etc.
+
+        Args:
+            query: The search keywords to look for inside files.
+            site_name: Display name of the site to query (e.g. "Finance"). 
+                Leave empty to use the default site. Call list_available_sites 
+                to see all configured options.
+        """
+        logger.info(f"Tool called: search_site_content query={query!r} site_name={site_name!r}")
+        try:
+            sp_ctx = ctx.request_context.lifespan_context
+            _check_auth(sp_ctx)
+            await refresh_token_if_needed(sp_ctx)
+            graph_client = GraphClient(sp_ctx)
+
+            site_url = _resolve_site_url(site_name)
+            logger.info(f"Searching content in site URL: {site_url}")
+
+            result = await graph_client.search_content(query, site_url)
+            
+            # Parse Search API response structure
+            items = []
+            if "value" in result and len(result["value"]) > 0:
+                hits_containers = result["value"][0].get("hitsContainers", [])
+                for container in hits_containers:
+                    for hit in container.get("hits", []):
+                        resource = hit.get("resource", {})
+                        items.append({
+                            "name": resource.get("name", "Unknown"),
+                            "summary": hit.get("summary", ""),
+                            "web_url": resource.get("webUrl", ""),
+                            "last_modified": resource.get("lastModifiedDateTime", ""),
+                            "created_by": resource.get("createdBy", {}).get("user", {}).get("displayName", "Unknown")
+                        })
+                        
+            logger.info(f"Successfully retrieved {len(items)} content search results")
+            return json.dumps(items, indent=2)
+        except Exception as e:
+            logger.error(f"Error in search_site_content: {str(e)}")
+            raise
+

@@ -9,6 +9,7 @@ from utils._graph_http import _GraphHttpMixin
 from utils._graph_list_ops import _GraphListOpsMixin
 from utils._graph_page_ops import _GraphPageOpsMixin
 from utils._graph_site_ops import _GraphSiteOpsMixin
+from utils._graph_search_ops import _GraphSearchOpsMixin
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -21,6 +22,7 @@ class GraphClient(
     _GraphListOpsMixin,
     _GraphPageOpsMixin,
     _GraphDriveOpsMixin,
+    _GraphSearchOpsMixin,
     _GraphHttpMixin,
 ):
     """Client for interacting with Microsoft Graph API."""
