@@ -32,7 +32,8 @@ class _GraphSearchOpsMixin:
                     "entityTypes": ["driveItem", "listItem"],
                     "query": {
                         "queryString": query_string
-                    }
+                    },
+                    "region": "NAM"  # Required for Application (App-Only) permissions
                 }
             ]
         }

@@ -175,41 +175,27 @@ def register_read_tools(mcp: FastMCP):
             graph_client = GraphClient(sp_ctx)
 
             site_url = _resolve_site_url(site_name)
-            site_parts = site_url.replace("https://", "").split("/")
-            domain = site_parts[0]
-            site_name_path = site_parts[2] if len(site_parts) > 2 else "root"
-            logger.info(f"Searching for '{query}' in site: {site_name_path}")
+            site_url = _resolve_site_url(site_name)
+            logger.info(f"Searching for '{query}' in site URL: {site_url}")
 
-            site_info = await graph_client.get_site_info(domain, site_name_path)
-            site_id = site_info.get("id")
-            if not site_id:
-                raise Exception("Error: Could not retrieve site ID")
-
-            search_url = f"sites/{site_id}/search"
-            search_data = {
-                "requests": [
-                    {
-                        "entityTypes": ["driveItem", "listItem", "list"],
-                        "query": {"queryString": query},
-                    }
-                ]
-            }
-            logger.debug(f"Search request: {search_data}")
-            search_results = await graph_client.post(search_url, search_data)
+            # Use the global Graph Search API which correctly supports Application permissions
+            # and searches across the specific site path.
+            search_results = await graph_client.search_content(query, site_url)
 
             formatted_results = []
-            for result in search_results.get("value", [])[0].get("hitsContainers", []):
-                for hit in result.get("hits", []):
-                    formatted_results.append(
-                        {
-                            "title": hit.get("resource", {}).get("name", "Unknown"),
-                            "url": hit.get("resource", {}).get("webUrl", "Unknown"),
-                            "type": hit.get("resource", {}).get(
-                                "@odata.type", "Unknown"
-                            ),
-                            "summary": hit.get("summary", "No summary available"),
-                        }
-                    )
+            if "value" in search_results and len(search_results["value"]) > 0:
+                for result in search_results["value"][0].get("hitsContainers", []):
+                    for hit in result.get("hits", []):
+                        formatted_results.append(
+                            {
+                                "title": hit.get("resource", {}).get("name", "Unknown"),
+                                "url": hit.get("resource", {}).get("webUrl", "Unknown"),
+                                "type": hit.get("resource", {}).get(
+                                    "@odata.type", "Unknown"
+                                ),
+                                "summary": hit.get("summary", "No summary available"),
+                            }
+                        )
             logger.info(f"Search returned {len(formatted_results)} results")
             return json.dumps(formatted_results, indent=2)
         except Exception as e:
