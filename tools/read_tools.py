@@ -156,7 +156,13 @@ def register_read_tools(mcp: FastMCP):
             raise
 
     @mcp.tool()
-    async def search_sharepoint(ctx: Context, query: str, site_name: str = None) -> str:
+    async def search_sharepoint(
+        ctx: Context,
+        query: str,
+        site_name: str = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> str:
         """Search content in a SharePoint site.
 
         Args:
@@ -164,9 +170,11 @@ def register_read_tools(mcp: FastMCP):
             site_name: Display name of the site to search (e.g. "Home",
                 "HR Portal"). Leave empty to search the default site.
                 Call list_available_sites to see all configured options.
+            limit: Maximum number of search results to return.
+            offset: The offset start point for pagination.
         """
         logger.info(
-            f"Tool called: search_sharepoint query={query!r} site_name={site_name!r}"
+            f"Tool called: search_sharepoint query={query!r} site_name={site_name!r} limit={limit} offset={offset}"
         )
         try:
             sp_ctx = ctx.request_context.lifespan_context
@@ -175,12 +183,13 @@ def register_read_tools(mcp: FastMCP):
             graph_client = GraphClient(sp_ctx)
 
             site_url = _resolve_site_url(site_name)
-            site_url = _resolve_site_url(site_name)
             logger.info(f"Searching for '{query}' in site URL: {site_url}")
 
             # Use the global Graph Search API which correctly supports Application permissions
             # and searches across the specific site path.
-            search_results = await graph_client.search_content(query, site_url)
+            search_results = await graph_client.search_content(
+                query, site_url, size=limit, from_offset=offset
+            )
 
             formatted_results = []
             if "value" in search_results and len(search_results["value"]) > 0:
@@ -639,7 +648,13 @@ def register_read_tools(mcp: FastMCP):
             raise
 
     @mcp.tool()
-    async def search_site_content(ctx: Context, query: str, site_name: str = None) -> str:
+    async def search_site_content(
+        ctx: Context,
+        query: str,
+        site_name: str = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> str:
         """Search the deep content of all documents and lists in a SharePoint site.
         
         Unlike search_sharepoint which only matches filenames, this uses Microsoft Search
@@ -650,8 +665,12 @@ def register_read_tools(mcp: FastMCP):
             site_name: Display name of the site to query (e.g. "Finance"). 
                 Leave empty to use the default site. Call list_available_sites 
                 to see all configured options.
+            limit: Maximum number of search results to return.
+            offset: The offset start point for pagination.
         """
-        logger.info(f"Tool called: search_site_content query={query!r} site_name={site_name!r}")
+        logger.info(
+            f"Tool called: search_site_content query={query!r} site_name={site_name!r} limit={limit} offset={offset}"
+        )
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
@@ -661,20 +680,10 @@ def register_read_tools(mcp: FastMCP):
             site_url = _resolve_site_url(site_name)
             logger.info(f"Searching content in site URL: {site_url}")
 
-            # Build the KQL query — restrict to specific site if provided
-            kql = f'{query} Path:"{site_url}"'
-
-            # Call the Microsoft Graph Search API directly (region IND required for app-only auth)
-            payload = {
-                "requests": [
-                    {
-                        "entityTypes": ["driveItem", "listItem"],
-                        "query": {"queryString": kql},
-                        "region": "IND"
-                    }
-                ]
-            }
-            result = await graph_client.post("search/query", payload)
+            # Reuse the Graph Search client helper to support dynamic region & pagination parameters
+            result = await graph_client.search_content(
+                query, site_url, size=limit, from_offset=offset
+            )
 
             # Parse the nested hitsContainers structure
             items = []

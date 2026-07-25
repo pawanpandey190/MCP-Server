@@ -10,13 +10,19 @@ class _GraphSearchOpsMixin:
     """Methods for interacting with Microsoft Graph Search API."""
 
     async def search_content(
-        self, query_string: str, site_url: Optional[str] = None
+        self,
+        query_string: str,
+        site_url: Optional[str] = None,
+        size: int = 25,
+        from_offset: int = 0,
     ) -> Dict[str, Any]:
         """Perform a full-text search across SharePoint using Microsoft Graph Search API.
         
         Args:
             query_string: The search keyword or KQL query.
             site_url: Optional specific site URL to restrict the search.
+            size: Number of search results to return.
+            from_offset: The offset start point for pagination.
             
         Returns:
             The search response JSON from Graph API.
@@ -33,10 +39,16 @@ class _GraphSearchOpsMixin:
                     "query": {
                         "queryString": query_string
                     },
-                    "region": "IND"  # Required for Application (App-Only) permissions
+                    "from": from_offset,
+                    "size": size,
                 }
             ]
         }
 
-        logger.info(f"Executing search API with query: {query_string}")
+        from config.settings import SEARCH_REGION
+        if SEARCH_REGION:
+            payload["requests"][0]["region"] = SEARCH_REGION
+
+        logger.info(f"Executing search API with query: {query_string} (region: {SEARCH_REGION}, size: {size}, offset: {from_offset})")
         return await self.post(endpoint, payload)
+

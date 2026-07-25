@@ -66,6 +66,8 @@ if SITES and not SHAREPOINT_CONFIG["site_url"]:
 # Microsoft Graph API settings
 GRAPH_API_VERSION = "v1.0"
 GRAPH_BASE_URL = f"https://graph.microsoft.com/{GRAPH_API_VERSION}"
+SEARCH_REGION = os.getenv("SEARCH_REGION", "IND")
+
 
 # Document processing settings
 DOCUMENT_PROCESSING = {
