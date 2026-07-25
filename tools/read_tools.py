@@ -661,9 +661,22 @@ def register_read_tools(mcp: FastMCP):
             site_url = _resolve_site_url(site_name)
             logger.info(f"Searching content in site URL: {site_url}")
 
-            result = await graph_client.search_content(query, site_url)
-            
-            # Parse Search API response structure
+            # Build the KQL query — restrict to specific site if provided
+            kql = f'{query} Path:"{site_url}"'
+
+            # Call the Microsoft Graph Search API directly (region IND required for app-only auth)
+            payload = {
+                "requests": [
+                    {
+                        "entityTypes": ["driveItem", "listItem"],
+                        "query": {"queryString": kql},
+                        "region": "IND"
+                    }
+                ]
+            }
+            result = await graph_client.post("search/query", payload)
+
+            # Parse the nested hitsContainers structure
             items = []
             if "value" in result and len(result["value"]) > 0:
                 hits_containers = result["value"][0].get("hitsContainers", [])
@@ -677,7 +690,7 @@ def register_read_tools(mcp: FastMCP):
                             "last_modified": resource.get("lastModifiedDateTime", ""),
                             "created_by": resource.get("createdBy", {}).get("user", {}).get("displayName", "Unknown")
                         })
-                        
+
             logger.info(f"Successfully retrieved {len(items)} content search results")
             return json.dumps(items, indent=2)
         except Exception as e:
