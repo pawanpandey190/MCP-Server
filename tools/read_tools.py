@@ -182,8 +182,12 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_url = _resolve_site_url(site_name)
-            logger.info(f"Searching for '{query}' in site URL: {site_url}")
+            if site_name and site_name.lower() in ("global", "all"):
+                site_url = None
+                logger.info(f"Searching for '{query}' globally across all sites")
+            else:
+                site_url = _resolve_site_url(site_name)
+                logger.info(f"Searching for '{query}' in site URL: {site_url}")
 
             # Use the global Graph Search API which correctly supports Application permissions
             # and searches across the specific site path.
@@ -195,13 +199,16 @@ def register_read_tools(mcp: FastMCP):
             if "value" in search_results and len(search_results["value"]) > 0:
                 for result in search_results["value"][0].get("hitsContainers", []):
                     for hit in result.get("hits", []):
+                        resource = hit.get("resource", {})
+                        parent_ref = resource.get("parentReference", {})
                         formatted_results.append(
                             {
-                                "title": hit.get("resource", {}).get("name", "Unknown"),
-                                "url": hit.get("resource", {}).get("webUrl", "Unknown"),
-                                "type": hit.get("resource", {}).get(
-                                    "@odata.type", "Unknown"
-                                ),
+                                "title": resource.get("name", "Unknown"),
+                                "url": resource.get("webUrl", "Unknown"),
+                                "type": resource.get("@odata.type", "Unknown"),
+                                "item_id": resource.get("id", "Unknown"),
+                                "site_id": parent_ref.get("siteId", "Unknown"),
+                                "drive_id": parent_ref.get("driveId", "Unknown"),
                                 "summary": hit.get("summary", "No summary available"),
                             }
                         )
@@ -677,8 +684,12 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_url = _resolve_site_url(site_name)
-            logger.info(f"Searching content in site URL: {site_url}")
+            if site_name and site_name.lower() in ("global", "all"):
+                site_url = None
+                logger.info(f"Searching content globally across all sites")
+            else:
+                site_url = _resolve_site_url(site_name)
+                logger.info(f"Searching content in site URL: {site_url}")
 
             # Reuse the Graph Search client helper to support dynamic region & pagination parameters
             result = await graph_client.search_content(
@@ -692,10 +703,14 @@ def register_read_tools(mcp: FastMCP):
                 for container in hits_containers:
                     for hit in container.get("hits", []):
                         resource = hit.get("resource", {})
+                        parent_ref = resource.get("parentReference", {})
                         items.append({
                             "name": resource.get("name", "Unknown"),
                             "summary": hit.get("summary", ""),
                             "web_url": resource.get("webUrl", ""),
+                            "item_id": resource.get("id", "Unknown"),
+                            "site_id": parent_ref.get("siteId", "Unknown"),
+                            "drive_id": parent_ref.get("driveId", "Unknown"),
                             "last_modified": resource.get("lastModifiedDateTime", ""),
                             "created_by": resource.get("createdBy", {}).get("user", {}).get("displayName", "Unknown")
                         })

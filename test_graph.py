@@ -9,15 +9,16 @@ with open("/Users/pawanpandey/Documents/SP-MCP/sharepoint-mcp/envs/mcp-rd.env") 
             k, v = line.strip().split("=", 1)
             env[k] = v.strip("'\"")
 
-token_url = f"https://login.microsoftonline.com/{env['SHAREPOINT_TENANT_ID']}/oauth2/v2.0/token"
+token_url = f"https://login.microsoftonline.com/{env['TENANT_ID']}/oauth2/v2.0/token"
 data = {
-    "client_id": env["SHAREPOINT_CLIENT_ID"],
+    "client_id": env["CLIENT_ID"],
     "scope": "https://graph.microsoft.com/.default",
-    "client_secret": env["SHAREPOINT_CLIENT_SECRET"],
+    "client_secret": env["CLIENT_SECRET"],
     "grant_type": "client_credentials"
 }
 res = requests.post(token_url, data=data)
 token = res.json()["access_token"]
+
 
 payload = {
     "requests": [

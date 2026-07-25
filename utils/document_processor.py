@@ -42,6 +42,26 @@ class DocumentProcessor:
         return True
 
     @staticmethod
+    def _sanitize_df_for_json(df: pd.DataFrame) -> pd.DataFrame:
+        """Convert datetime, Timestamp, and other non-serializable objects to string."""
+        import datetime
+        df_copy = df.copy()
+        
+        # Convert column names to strings (some sheets have numbers as columns)
+        df_copy.columns = [str(col) for col in df_copy.columns]
+        
+        for col in df_copy.columns:
+            # If the column has a datetime/timestamp dtype, convert it to string
+            if pd.api.types.is_datetime64_any_dtype(df_copy[col]):
+                df_copy[col] = df_copy[col].astype(str)
+            else:
+                # E.g. object columns containing datetime or Timestamp objects
+                df_copy[col] = df_copy[col].apply(
+                    lambda x: str(x) if isinstance(x, (datetime.datetime, datetime.date, pd.Timestamp)) else x
+                )
+        return df_copy
+
+    @staticmethod
     def process_document(
         content: bytes | None,
         filename: str,
@@ -160,14 +180,26 @@ class DocumentProcessor:
             import numpy as np
             local_env["np"] = np
 
-            result = eval(query, {"__builtins__": {}}, local_env)
+            # Provide safe builtins to allow type conversions (e.g. astype(str))
+            safe_builtins = {
+                "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
+                "float": float, "int": int, "len": len, "list": list, "max": max,
+                "min": min, "range": range, "round": round, "set": set, "str": str,
+                "sum": sum, "tuple": tuple
+            }
+
+            result = eval(query, {"__builtins__": safe_builtins}, local_env)
             
             # Convert result to string or JSON serializable format
-            if isinstance(result, pd.Series) or isinstance(result, pd.DataFrame):
+            if isinstance(result, pd.Series):
+                result = result.to_frame()
+                
+            if isinstance(result, pd.DataFrame):
                 # For safety, limit large returns even from queries
                 if len(result) > 1000:
                     return {"error": f"Query returned {len(result)} rows. Please aggregate further (e.g. use .head() or .sum())."}
-                result_data = result.to_dict()
+                sanitized_result = DocumentProcessor._sanitize_df_for_json(result)
+                result_data = sanitized_result.to_dict()
             else:
                 # E.g. a float, int, str from aggregations
                 result_data = str(result)
@@ -224,7 +256,7 @@ class DocumentProcessor:
             "extracted_range": {"start_row": start_idx + 1, "end_row": end_idx},
             "rows_returned": len(df_slice),
             "columns": list(df.columns),
-            "data": df_slice.to_dict(orient="records"),
+            "data": DocumentProcessor._sanitize_df_for_json(df_slice).to_dict(orient="records"),
             "summary": {
                 "numeric_columns": df.select_dtypes(include=["number"]).columns.tolist(),
                 "missing_values": df.isnull().sum().to_dict(),
@@ -282,12 +314,13 @@ class DocumentProcessor:
             ]
             df_slice.columns = df.columns
 
+            sanitized_slice = DocumentProcessor._sanitize_df_for_json(df_slice)
             sheets[sheet_name] = {
                 "total_rows": total_rows,
                 "extracted_range": {"start_row": start_idx + 1, "end_row": end_idx},
                 "rows_returned": len(df_slice),
                 "columns": list(df.columns),
-                "data": df_slice.to_dict(orient="records"),
+                "data": sanitized_slice.to_dict(orient="records"),
                 "summary": {
                     "numeric_columns": df.select_dtypes(
                         include=["number"]
@@ -358,12 +391,13 @@ class DocumentProcessor:
             ]
             df_slice.columns = df.columns
 
+            sanitized_slice = DocumentProcessor._sanitize_df_for_json(df_slice)
             sheets[sheet_name] = {
                 "total_rows": total_rows,
                 "extracted_range": {"start_row": start_idx + 1, "end_row": end_idx},
                 "rows_returned": len(df_slice),
                 "columns": list(df.columns),
-                "data": df_slice.to_dict(orient="records"),
+                "data": sanitized_slice.to_dict(orient="records"),
                 "summary": {
                     "numeric_columns": df.select_dtypes(
                         include=["number"]
