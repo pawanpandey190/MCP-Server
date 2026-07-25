@@ -27,9 +27,18 @@ class _GraphSearchOpsMixin:
         Returns:
             The search response JSON from Graph API.
         """
+        # Clean the input query from quotes that might break KQL syntax
+        clean_query = query_string.replace('"', '').replace("'", "").strip()
+        
+        # Build optimized KQL query: match terms, boost filename matches, exclude system filetypes
+        kql_query = f'("{clean_query}") XRANK(cb=100.0) (Title:"{clean_query}" OR filename:"{clean_query}")'
+        kql_query += ' NOT FileType:lnk NOT FileType:aspx'
+        
         # If site_url is provided, restrict search to that specific site path
         if site_url:
-            query_string = f'{query_string} Path:"{site_url}"'
+            kql_query = f'({kql_query}) AND Path:"{site_url}"'
+
+        query_string = kql_query
 
         endpoint = "search/query"
         payload = {
@@ -41,6 +50,7 @@ class _GraphSearchOpsMixin:
                     },
                     "from": from_offset,
                     "size": size,
+                    "trimDuplicates": True,
                 }
             ]
         }

@@ -35,6 +35,55 @@ def register_read_tools(mcp: FastMCP):
             )
         return url
 
+    def _rerank_results(results: list, query: str) -> list:
+        """Score and sort results based on search term frequency, filename priority, and document value."""
+        if not results or not query:
+            return results
+
+        clean_query = query.lower().replace('"', '').replace("'", "").strip()
+        query_words = [w for w in clean_query.split() if len(w) > 2]
+
+        scored_results = []
+        for item in results:
+            score = 0
+            title = item.get("title", item.get("name", "")).lower()
+            summary = item.get("summary", "").lower()
+
+            # 1. Filename Exact and Substring match
+            if clean_query in title:
+                score += 50
+            for word in query_words:
+                if word in title:
+                    score += 10
+
+            # 2. Summary exact phrase and term density match
+            if clean_query in summary:
+                score += 15
+            for word in query_words:
+                if word in summary:
+                    score += 5
+
+            # 3. File extension priority weighting
+            filename = item.get("title", item.get("name", ""))
+            ext = filename.split('.')[-1].lower() if '.' in filename else ''
+            
+            if ext in ('xlsx', 'xls', 'xlsb', 'csv', 'pdf', 'docx'):
+                score += 15
+            elif ext in ('txt', 'md'):
+                score += 5
+            elif ext in ('eml', 'msg', 'aspx', 'png', 'jpg', 'gif', 'jpeg'):
+                score -= 30
+
+            item["_relevance_score"] = score
+            scored_results.append(item)
+
+        scored_results.sort(key=lambda x: x["_relevance_score"], reverse=True)
+        
+        for item in scored_results:
+            item.pop("_relevance_score", None)
+            
+        return scored_results
+
     @mcp.tool()
     async def list_available_sites(ctx: Context) -> str:
         """List all SharePoint sites configured in this MCP server.
@@ -182,12 +231,8 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            if site_name and site_name.lower() in ("global", "all"):
-                site_url = None
-                logger.info(f"Searching for '{query}' globally across all sites")
-            else:
-                site_url = _resolve_site_url(site_name)
-                logger.info(f"Searching for '{query}' in site URL: {site_url}")
+            site_url = _resolve_site_url(site_name)
+            logger.info(f"Searching for '{query}' in site URL: {site_url}")
 
             # Use the global Graph Search API which correctly supports Application permissions
             # and searches across the specific site path.
@@ -212,8 +257,9 @@ def register_read_tools(mcp: FastMCP):
                                 "summary": hit.get("summary", "No summary available"),
                             }
                         )
-            logger.info(f"Search returned {len(formatted_results)} results")
-            return json.dumps(formatted_results, indent=2)
+            logger.info(f"Search returned {len(formatted_results)} results before reranking")
+            reranked = _rerank_results(formatted_results, query)
+            return json.dumps(reranked, indent=2)
         except Exception as e:
             logger.error(f"Error in search_sharepoint: {str(e)}")
             raise
@@ -684,12 +730,8 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            if site_name and site_name.lower() in ("global", "all"):
-                site_url = None
-                logger.info(f"Searching content globally across all sites")
-            else:
-                site_url = _resolve_site_url(site_name)
-                logger.info(f"Searching content in site URL: {site_url}")
+            site_url = _resolve_site_url(site_name)
+            logger.info(f"Searching content in site URL: {site_url}")
 
             # Reuse the Graph Search client helper to support dynamic region & pagination parameters
             result = await graph_client.search_content(
@@ -715,8 +757,9 @@ def register_read_tools(mcp: FastMCP):
                             "created_by": resource.get("createdBy", {}).get("user", {}).get("displayName", "Unknown")
                         })
 
-            logger.info(f"Successfully retrieved {len(items)} content search results")
-            return json.dumps(items, indent=2)
+            logger.info(f"Successfully retrieved {len(items)} content search results before reranking")
+            reranked = _rerank_results(items, query)
+            return json.dumps(reranked, indent=2)
         except Exception as e:
             logger.error(f"Error in search_site_content: {str(e)}")
             raise
