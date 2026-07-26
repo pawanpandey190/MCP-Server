@@ -30,8 +30,9 @@ class _GraphSearchOpsMixin:
         # Clean the input query from quotes that might break KQL syntax
         clean_query = query_string.replace('"', '').replace("'", "").strip()
         
-        # Build optimized KQL query: match terms, boost filename matches, exclude system filetypes
-        kql_query = f'("{clean_query}") XRANK(cb=100.0) (Title:"{clean_query}" OR filename:"{clean_query}")'
+        # Build optimized KQL query: match terms in any order (high recall),
+        # but boost exact phrase matches (high precision), and exclude system filetypes
+        kql_query = f'({clean_query}) XRANK(cb=100.0) ("{clean_query}" OR Title:"{clean_query}" OR filename:"{clean_query}")'
         kql_query += ' NOT FileType:lnk NOT FileType:aspx'
         
         # If site_url is provided, restrict search to that specific site path
