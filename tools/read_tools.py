@@ -215,7 +215,7 @@ def register_read_tools(mcp: FastMCP):
         """Search content in a SharePoint site.
 
         Args:
-            query: Search query string
+            query: Search query string. Keep it short, precise, and focused on key terms (e.g. 'Bharat Forge' or 'bearing'). Avoid long sentences or combining multiple unrelated concepts.
             site_name: Display name of the site to search (e.g. "Home",
                 "HR Portal"). Leave empty to search the default site.
                 Call list_available_sites to see all configured options.
@@ -714,7 +714,7 @@ def register_read_tools(mcp: FastMCP):
         to perform full-text search inside the actual contents of PDFs, Word docs, etc.
 
         Args:
-            query: The search keywords to look for inside files.
+            query: The search keywords to look for inside files. Keep it short and focused on key terms (e.g. 'Bharat Forge' or 'bearing dimensions'). Avoid combining multiple distinct concepts or long sentences.
             site_name: Display name of the site to query (e.g. "Finance"). 
                 Leave empty to use the default site. Call list_available_sites 
                 to see all configured options.

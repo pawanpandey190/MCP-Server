@@ -18,7 +18,7 @@ def register_site_prompts(mcp: FastMCP):
         return (
             f"You are a SharePoint analyst assistant. Your task is to investigate '{query}'{site_context}.\n\n"
             f"Please follow these steps:\n"
-            f"1. Use `search_site_content` to find documents related to '{query}'{site_context}.\n"
+            f"1. Extract clean, concise keywords from '{query}' (e.g., split into separate searches like 'Bharat Forge' or 'bearing dimensions' if it contains multiple different concepts). Use `search_site_content` to find documents related to these keywords.\n"
             f"2. For the top 2-3 most relevant documents (e.g., PDF, DOCX, XLSX), read their text contents using `get_document_content` (or `get_document_by_path`).\n"
             f"3. Generate a structured summary of the findings, including file names, URLs, and key takeaways."
         )
