@@ -209,7 +209,7 @@ def register_read_tools(mcp: FastMCP):
         ctx: Context,
         query: str,
         site_name: str = None,
-        limit: int = 25,
+        limit: int = 10,
         offset: int = 0,
     ) -> str:
         """Search content in a SharePoint site.
@@ -705,7 +705,7 @@ def register_read_tools(mcp: FastMCP):
         ctx: Context,
         query: str,
         site_name: str = None,
-        limit: int = 25,
+        limit: int = 10,
         offset: int = 0,
     ) -> str:
         """Search the deep content of all documents and lists in a SharePoint site.

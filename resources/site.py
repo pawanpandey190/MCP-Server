@@ -4,15 +4,16 @@ import json
 from mcp.server.fastmcp import FastMCP, Context
 
 from auth.sharepoint_auth import refresh_token_if_needed
-from config.settings import SHAREPOINT_CONFIG
+from config.settings import SHAREPOINT_CONFIG, SITES
 from utils.graph_client import GraphClient
 
 
 def register_site_resources(mcp: FastMCP):
     """Register SharePoint site resources with the MCP server."""
 
+    @mcp.resource("sharepoint://site-info")
     async def site_info_handler(ctx: Context) -> str:
-        """Get basic information about the SharePoint site."""
+        """Get basic information about the default SharePoint site."""
         await refresh_token_if_needed(ctx.request_context.lifespan_context)
         sp_ctx = ctx.request_context.lifespan_context
 
@@ -43,4 +44,10 @@ def register_site_resources(mcp: FastMCP):
         except Exception as e:
             return f"Error accessing SharePoint: {str(e)}"
 
-    mcp.resource("sharepoint://site-info")(site_info_handler)
+    @mcp.resource("sharepoint://configured-sites")
+    def configured_sites_handler() -> str:
+        """Get the list of all configured SharePoint site aliases and URLs in this server."""
+        sites_list = [
+            {"name": name, "url": url} for name, url in SITES.items()
+        ]
+        return json.dumps(sites_list, indent=2)

@@ -14,6 +14,9 @@ from mcp.server.transport_security import TransportSecuritySettings
 from auth.sharepoint_auth import SharePointContext, get_auth_context
 from config.settings import APP_NAME, DEBUG
 from tools.site_tools import register_site_tools
+from resources.site import register_site_resources
+from prompts.site_prompts import register_site_prompts
+
 
 # Set logging level
 logging_level = logging.DEBUG if DEBUG else logging.INFO
@@ -83,8 +86,10 @@ mcp = FastMCP(
     ),
 )
 
-# Register tools
+# Register tools, resources, and prompts
 register_site_tools(mcp)
+register_site_resources(mcp)
+register_site_prompts(mcp)
 
 
 def main():
